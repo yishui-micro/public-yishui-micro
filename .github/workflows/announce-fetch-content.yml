@@ -1,0 +1,252 @@
+# 功能：
+# - 无需输入参数，自动从各年度 raw 仓扫描待处理批次文件。
+# - 通过 Redis SET NX 抢占批次锁，支持多副本仓并发各自处理不同批次。
+# - 按 runner 分片并行抓取公告正文，将结果归并后按日写入 raw/content/YYYYMM/YYYYMMDD_XXXX.parquet。
+# - 归并发布后自动删除已处理批次文件，并释放 Redis 锁。
+# - 若仍有待处理批次则自触发下一轮 `announce-fetch-content.yml`；
+#   若批次已清空则幂等触发 `announce-build-features.yml`。
+#
+# 用法：
+# - 该源文件应复制到任意 workflow 副本仓库中运行；副本仓库需要配置主仓 PAT、数据仓 PAT 和 REDIS_URL。
+# - 可通过 `workflow_dispatch` 手动触发，也可配合 schedule 定时触发。
+# - workflow 内调用的核心脚本命令包括：
+#   `plan-and-lock-batch`、`fetch-content-worker`、`merge-content-fragments`、
+#   `publish-runtime-content`、`delete-processed-batch`、`release-batch-lock`、`continue-fetch`。
+name: 公告正文抓取
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "20 11 * * 1-5"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: announce-fetch-content
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      runner_count: ${{ steps.plan.outputs.runner_count }}
+      total_codes: ${{ steps.plan.outputs.total_codes }}
+      batch_id: ${{ steps.plan.outputs.batch_id }}
+      batch_repo: ${{ steps.plan.outputs.batch_repo }}
+      matrix_json: ${{ steps.plan.outputs.matrix_json }}
+    env:
+      GP_CODE_GITHUB_OWNER: hiyishui
+      GP_DATA_GITHUB_OWNER: larkself
+      GP_CODE_REPO: my-stock
+      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
+      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+    steps:
+      - name: Check out workflow replica repo
+        uses: actions/checkout@v4
+
+      - name: Check out my-stock source repo
+        uses: actions/checkout@v4
+        with:
+          repository: hiyishui/my-stock
+          ref: main
+          path: my-stock-src
+          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+
+      - name: Resolve runtime roots
+        run: |
+          PYTHONPATH="${GITHUB_WORKSPACE}/my-stock-src/src" python -m my_stock announce write-runtime-roots
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./my-stock-src
+          python -m pip install redis
+
+      - name: Grab batch via Redis lock and split assignments
+        id: plan
+        run: |
+          python -m my_stock announce plan-and-lock-batch
+
+      - name: Upload plan artifacts
+        if: steps.plan.outputs.runner_count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: announce-content-plan
+          retention-days: 1
+          path: ${{ runner.temp }}/announce-plan
+
+  fetch:
+    needs: plan
+    if: needs.plan.outputs.runner_count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        idx: ${{ fromJson(needs.plan.outputs.matrix_json) }}
+    env:
+      GP_CODE_GITHUB_OWNER: hiyishui
+      GP_DATA_GITHUB_OWNER: larkself
+      GP_CODE_REPO: my-stock
+      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
+      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
+    steps:
+      - name: Check out workflow replica repo
+        uses: actions/checkout@v4
+
+      - name: Check out my-stock source repo
+        uses: actions/checkout@v4
+        with:
+          repository: hiyishui/my-stock
+          ref: main
+          path: my-stock-src
+          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+
+      - name: Resolve runtime roots
+        run: |
+          PYTHONPATH="${GITHUB_WORKSPACE}/my-stock-src/src" python -m my_stock announce write-runtime-roots
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./my-stock-src
+
+      - name: Download plan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: announce-content-plan
+          path: ${{ runner.temp }}/announce-plan
+
+      - name: Fetch content
+        run: |
+          python -m my_stock announce fetch-content-worker \
+            --codes-file "${RUNNER_TEMP}/announce-plan/assignments/runner_${{ matrix.idx }}.json.gz" \
+            --runner-idx "${{ matrix.idx }}" \
+            --output-dir "${RUNNER_TEMP}/announce-content-output" \
+            --timeout 10 \
+            --summary-output "${RUNNER_TEMP}/announce-content-worker-${{ matrix.idx }}.json"
+
+      - name: Upload runner outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: announce-content-results-${{ matrix.idx }}
+          retention-days: 1
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/announce-content-output
+
+  merge:
+    needs: [plan, fetch]
+    if: always() && needs.plan.outputs.runner_count != '0'
+    runs-on: ubuntu-latest
+    env:
+      GP_CODE_GITHUB_OWNER: hiyishui
+      GP_DATA_GITHUB_OWNER: larkself
+      GP_CODE_REPO: my-stock
+      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
+      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
+      BATCH_ID: ${{ needs.plan.outputs.batch_id }}
+      BATCH_REPO: ${{ needs.plan.outputs.batch_repo }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      ACTION_DISPATCH_TOKEN_MAP: ${{ secrets.ACTION_DISPATCH_TOKEN_MAP }}
+    steps:
+      - name: Check out workflow replica repo
+        uses: actions/checkout@v4
+
+      - name: Check out my-stock source repo
+        uses: actions/checkout@v4
+        with:
+          repository: hiyishui/my-stock
+          ref: main
+          path: my-stock-src
+          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+
+      - name: Resolve runtime roots
+        run: |
+          PYTHONPATH="${GITHUB_WORKSPACE}/my-stock-src/src" python -m my_stock announce write-runtime-roots
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./my-stock-src
+          python -m pip install redis
+
+      - name: Download plan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: announce-content-plan
+          path: ${{ runner.temp }}/announce-plan
+
+      - name: Download runner results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: announce-content-results-*
+          path: ${{ runner.temp }}/announce-content-results
+          merge-multiple: true
+
+      - name: Sync required raw repos
+        run: |
+          python -m my_stock announce sync-repos-from-selected-batch
+
+      - name: Merge content fragments into runtime
+        run: |
+          python -m my_stock announce merge-content-fragments \
+            --input-root "${RUNNER_TEMP}/announce-content-results" \
+            --batch-id "${BATCH_ID}" \
+            --summary-output "${RUNNER_TEMP}/announce-merge-content-summary.json"
+
+      - name: Publish runtime content files to touched raw repos
+        run: |
+          python -m my_stock announce publish-runtime-content --batch-id "${BATCH_ID}"
+
+      - name: Delete processed batch file
+        run: |
+          python -m my_stock announce delete-processed-batch --batch-repo "${BATCH_REPO}" --batch-id "${BATCH_ID}"
+
+      - name: Release Redis lock
+        if: always()
+        run: |
+          python -m my_stock announce release-batch-lock
+
+      - name: Upload merge summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: announce-merge-content-summary
+          path: ${{ runner.temp }}/announce-merge-content-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Continue fetching or trigger features when drained
+        if: always()
+        run: |
+          python -m my_stock announce continue-fetch
