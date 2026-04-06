@@ -55,19 +55,21 @@ jobs:
           path: my-stock-src
           token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
 
-      - name: Resolve runtime roots
-        run: |
-          PYTHONPATH="${GITHUB_WORKSPACE}/my-stock-src/src" python -m my_stock announce write-runtime-roots
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: my-stock-src/pyproject.toml
 
       - name: Install project dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install ./my-stock-src
+
+      - name: Resolve runtime roots
+        run: |
+          python -m my_stock announce write-runtime-roots
 
       - name: Resolve date range
         id: range

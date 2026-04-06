@@ -1,0 +1,185 @@
+# 功能：
+# - 抓取指定日期范围的公告列表，并按年份生成 parquet。
+# - 先将控制面列表文件写入 `GP_RUNTIME_ROOT/announce/list/YYYY.parquet`。
+# - 列表产物仅发布到年度 raw 仓日级明细路径：
+#   `raw/list/YYYYMM/YYYYMMDD.parquet`。
+# - 在同一 workflow 内继续执行候选筛选与批次生成；候选仅保留在 runtime，
+#   批次发布到年度 raw 仓：`data/announce/content_batches/*.json.gz`。
+# - 批次发布完成后，按 `ACTION_DISPATCH_TOKEN_MAP` 分发 `announce-fetch-content.yml` 到副本仓。
+#
+# 用法：
+# - 该源文件应复制到任意 workflow 副本仓库中运行；副本仓库需要配置主仓 PAT 和数据仓 PAT。
+# - GitHub Actions 可通过 `workflow_dispatch` 手动触发，并传入 `date_range`，支持 `2019~2025`、`202601~202603`、`20260401~20260404`。
+# - `date_range` 留空时默认当天到当天。
+# - workflow 内调用的核心脚本命令包括：
+#   `fetch-list`、`filter-candidates-workflow`、`generate-content-batches`、
+#   `publish-list-summary`、`publish-content-batch-summary`、`dispatch-replicas`。
+name: 公告列表抓取并生成批次
+
+on:
+  workflow_dispatch:
+    inputs:
+      date_range:
+        description: "日期范围，支持 2019~2025 / 202601~202603 / 20260401~20260404；留空时默认当天到当天"
+        required: false
+        default: ""
+        type: string
+      high_only:
+        description: "是否只保留高优先级候选"
+        required: false
+        default: false
+        type: boolean
+      batch_size:
+        description: "每个内容批次的公告数量"
+        required: false
+        default: "1000"
+        type: string
+  # schedule:
+  #   - cron: "30 10 * * 1-5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: announce-fetch-list
+  cancel-in-progress: false
+
+jobs:
+  fetch-list:
+    runs-on: ubuntu-latest
+    env:
+      GP_CODE_GITHUB_OWNER: hiyishui
+      GP_DATA_GITHUB_OWNER: larkself
+      GP_CODE_REPO: my-stock
+      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
+      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
+      INPUT_DATE_RANGE: ${{ github.event.inputs.date_range || '' }}
+      INPUT_HIGH_ONLY: ${{ github.event.inputs.high_only || 'false' }}
+      INPUT_BATCH_SIZE: ${{ github.event.inputs.batch_size || '1000' }}
+      ACTION_DISPATCH_TOKEN_MAP: ${{ secrets.ACTION_DISPATCH_TOKEN_MAP }}
+    steps:
+      - name: Check out workflow replica repo
+        uses: actions/checkout@v4
+
+      - name: Check out my-stock source repo
+        uses: actions/checkout@v4
+        with:
+          repository: hiyishui/my-stock
+          ref: main
+          path: my-stock-src
+          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: my-stock-src/pyproject.toml
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./my-stock-src
+
+      - name: Resolve runtime roots
+        run: |
+          python -m my_stock announce write-runtime-roots
+
+      - name: Resolve date range
+        id: range
+        shell: bash
+        run: |
+          python -m my_stock announce resolve-date-range --date-range "${INPUT_DATE_RANGE}"
+
+      - name: Check trading-day coverage
+        id: trade_guard
+        shell: bash
+        run: |
+          python -m my_stock announce check-trading-day-coverage \
+            --start "${{ steps.range.outputs.start }}" \
+            --end "${{ steps.range.outputs.end }}" \
+            --trade-dates-file "${GITHUB_WORKSPACE}/my-stock-src/data/basic/trade_date.json"
+
+      - name: Report skip reason
+        if: steps.trade_guard.outputs.should_run != 'true'
+        run: |
+          echo "${{ steps.trade_guard.outputs.skip_reason }}"
+
+      - name: Sync required raw repos
+        if: steps.trade_guard.outputs.should_run == 'true'
+        run: |
+          python -m my_stock announce sync-year-repos \
+            --start "${{ steps.range.outputs.start }}" \
+            --end "${{ steps.range.outputs.end }}"
+
+      - name: Fetch announcement list
+        if: steps.trade_guard.outputs.should_run == 'true'
+        run: |
+          python -m my_stock announce fetch-list \
+            --start "${{ steps.range.outputs.start }}" \
+            --end "${{ steps.range.outputs.end }}" \
+            --trade-dates-file "${GITHUB_WORKSPACE}/my-stock-src/data/basic/trade_date.json" \
+            --append \
+            --no-push \
+            --summary-output "${RUNNER_TEMP}/announce-fetch-list-summary.json"
+
+      - name: Commit and push year repos
+        if: steps.trade_guard.outputs.should_run == 'true'
+        run: |
+          python -m my_stock announce publish-list-summary \
+            --summary-path "${RUNNER_TEMP}/announce-fetch-list-summary.json" \
+            --start "${{ steps.range.outputs.start }}" \
+            --end "${{ steps.range.outputs.end }}"
+
+      - name: Upload fetch summary
+        if: steps.trade_guard.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: announce-fetch-list-summary
+          path: ${{ runner.temp }}/announce-fetch-list-summary.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Filter candidates
+        if: steps.trade_guard.outputs.should_run == 'true'
+        run: |
+          python -m my_stock announce filter-candidates-workflow \
+            --start "${{ steps.range.outputs.start }}" \
+            --end "${{ steps.range.outputs.end }}" \
+            --list-root "${GP_RUNTIME_ROOT}/announce/list" \
+            --high-only-text "${INPUT_HIGH_ONLY}" \
+            --no-push \
+            --summary-output "${RUNNER_TEMP}/announce-filter-candidates-summary.json"
+
+      - name: Generate content batches
+        if: steps.trade_guard.outputs.should_run == 'true'
+        run: |
+          python -m my_stock announce generate-content-batches \
+            --start "${{ steps.range.outputs.start }}" \
+            --end "${{ steps.range.outputs.end }}" \
+            --candidate-root "${GP_RUNTIME_ROOT}/announce/candidates" \
+            --batch-size "${INPUT_BATCH_SIZE}" \
+            --summary-output "${RUNNER_TEMP}/announce-generate-content-batches-summary.json"
+
+      - name: Commit and push batch files
+        if: steps.trade_guard.outputs.should_run == 'true'
+        run: |
+          python -m my_stock announce publish-content-batch-summary \
+          --summary-path "${RUNNER_TEMP}/announce-generate-content-batches-summary.json"
+
+      - name: Upload batch summary
+        if: steps.trade_guard.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: announce-generate-content-batches-summary
+          path: ${{ runner.temp }}/announce-generate-content-batches-summary.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Trigger content workflow replicas
+        if: steps.trade_guard.outputs.should_run == 'true'
+        run: |
+          python -m my_stock announce dispatch-replicas
