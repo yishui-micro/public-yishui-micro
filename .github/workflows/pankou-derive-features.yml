@@ -1,0 +1,118 @@
+# 功能：
+# - 从 `larkself/gp-pankou` 读取历史 base parquet，生成指定日期的 derived parquet。
+# - 发布前先把 runtime 文件 canonicalize 成旧仓 exact schema，再推回 `larkself/gp-derived`。
+#
+# 用法：
+# - 该源文件应复制到任意 workflow 副本仓库中运行；副本仓库需要配置主仓 PAT 和数据仓 PAT。
+# - 在 GitHub Actions 中通过 `workflow_dispatch` 手动触发，并传入 `date=YYYYMMDD`。
+# - 实际命令入口为 `python -m my_stock pankou derive-features`
+#   和 `python -m my_stock pankou canonicalize-derived`，其中代码来自 checkout 下来的 `hiyishui/my-stock`。
+name: 盘口派生特征生成
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "目标交易日，格式 YYYYMMDD"
+        required: true
+        type: string
+      history_days:
+        description: "滚动历史窗口天数"
+        required: false
+        default: "20"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pankou-derive-features-${{ inputs.date }}
+  cancel-in-progress: false
+
+jobs:
+  derive-features:
+    runs-on: ubuntu-latest
+    env:
+      GP_CODE_GITHUB_OWNER: hiyishui
+      GP_DATA_GITHUB_OWNER: larkself
+      GP_CODE_REPO: my-stock
+      GP_PANKOU_REPO: gp-pankou
+      GP_DERIVED_REPO: gp-derived
+      INPUT_DATE: ${{ inputs.date }}
+      INPUT_HISTORY_DAYS: ${{ inputs.history_days }}
+      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
+      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
+    steps:
+      - name: Check out workflow replica repo
+        uses: actions/checkout@v4
+
+      - name: Check out my-stock source repo
+        uses: actions/checkout@v4
+        with:
+          repository: hiyishui/my-stock
+          ref: main
+          path: my-stock-src
+          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+
+      - name: Resolve runtime roots
+        run: |
+          echo "GP_DATA_ROOT=${RUNNER_TEMP}/gp-data" >> "$GITHUB_ENV"
+          echo "GP_REPOS_ROOT=${RUNNER_TEMP}/gp-data/repos" >> "$GITHUB_ENV"
+          echo "GP_RUNTIME_ROOT=${RUNNER_TEMP}/gp-data/runtime" >> "$GITHUB_ENV"
+
+      - name: Normalize date
+        id: date
+        run: |
+          python -m my_stock common normalize-date \
+            --date "${INPUT_DATE}" \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./my-stock-src
+
+      - name: Sync gp-pankou
+        run: python -m my_stock common sync-repo gp-pankou
+
+      - name: Build derived feature parquets
+        run: |
+          python -m my_stock pankou derive-features \
+            --date "${{ steps.date.outputs.compact }}" \
+            --base-dir "${GP_REPOS_ROOT}/gp-pankou" \
+            --history-days "${INPUT_HISTORY_DAYS}" \
+            --summary-output "${RUNNER_TEMP}/pankou-derive-summary.json"
+
+      - name: Sync gp-derived
+        run: python -m my_stock common sync-repo gp-derived
+
+      - name: Canonicalize derived parquets
+        run: |
+          python -m my_stock pankou canonicalize-derived \
+            --date "${{ steps.date.outputs.compact }}" \
+            --summary-output "${RUNNER_TEMP}/pankou-canonical-derived-summary.json"
+
+      - name: Publish derived parquets to gp-derived
+        run: python -m my_stock pankou publish-derived --date "${{ steps.date.outputs.compact }}"
+
+      - name: Upload derived artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pankou-derived-${{ steps.date.outputs.compact }}
+          path: |
+            ${{ runner.temp }}/runtime/pankou/derived/market_structure/${{ steps.date.outputs.year }}/${{ steps.date.outputs.compact }}.parquet
+            ${{ runner.temp }}/runtime/pankou/derived/trade_behavior/${{ steps.date.outputs.year }}/${{ steps.date.outputs.compact }}.parquet
+            ${{ runner.temp }}/runtime/pankou/canonical/gp-derived/${{ steps.date.outputs.year }}/market_structure_${{ steps.date.outputs.compact }}.parquet
+            ${{ runner.temp }}/runtime/pankou/canonical/gp-derived/${{ steps.date.outputs.year }}/trade_behavior_${{ steps.date.outputs.compact }}.parquet
+            ${{ runner.temp }}/pankou-derive-summary.json
+            ${{ runner.temp }}/pankou-canonical-derived-summary.json
+          if-no-files-found: error
+          retention-days: 7
