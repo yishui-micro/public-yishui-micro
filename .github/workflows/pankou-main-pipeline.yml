@@ -1,0 +1,440 @@
+# 功能：
+# - 盘口数据主链: 下载 raw → 提取 base → 生成 derived，串行执行。
+# - 第一阶段并行分片下载 raw .dat，汇总推送到日期仓。
+# - 第二阶段为每个日期依次提取基础特征 → canonicalize → 推送 gp-pankou。
+# - 第三阶段为每个日期依次生成派生特征 → canonicalize → 推送 gp-derived。
+#
+# 用法：
+# - 该源文件应复制到任意 workflow 副本仓库中运行；副本仓库需要配置主仓 PAT 和数据仓 PAT。
+# - 在 GitHub Actions 中通过 `workflow_dispatch` 手动触发，可传入 `date`、`codes` 和 `force`。
+# - 若不传 `date`，workflow 会自动取 Asia/Shanghai 当天日期。
+name: 盘口主链刷新
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "日期: YYYYMMDD 或 YYYYMMDD~YYYYMMDD, 多个逗号分隔；留空默认当天"
+        required: false
+        default: ""
+        type: string
+      codes:
+        description: "可选股票代码(纯数字)逗号分隔, 留空表示全部"
+        required: false
+        default: ""
+        type: string
+      force:
+        description: "是否强制重下"
+        required: false
+        default: false
+        type: boolean
+      history_days:
+        description: "派生特征滚动历史窗口天数"
+        required: false
+        default: "20"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pankou-main-pipeline-${{ inputs.date }}
+  cancel-in-progress: false
+
+jobs:
+  # ───── 第一阶段：准备下载矩阵 ─────
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      has_work: ${{ steps.matrix.outputs.has_work }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      dates_matrix: ${{ steps.matrix.outputs.dates_matrix }}
+      resolved_date: ${{ steps.matrix.outputs.resolved_date }}
+      skip_reason: ${{ steps.matrix.outputs.skip_reason }}
+    env:
+      GP_CODE_GITHUB_OWNER: hiyishui
+      GP_DATA_GITHUB_OWNER: larkself
+      GP_CODE_REPO: my-stock
+      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
+      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
+    steps:
+      - name: Check out workflow replica repo
+        uses: actions/checkout@v4
+
+      - name: Check out my-stock source repo
+        uses: actions/checkout@v4
+        with:
+          repository: hiyishui/my-stock
+          ref: main
+          path: my-stock-src
+          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+
+      - name: Resolve runtime roots
+        run: |
+          echo "GP_DATA_ROOT=${RUNNER_TEMP}/gp-data" >> "$GITHUB_ENV"
+          echo "GP_REPOS_ROOT=${RUNNER_TEMP}/gp-data/repos" >> "$GITHUB_ENV"
+          echo "GP_RUNTIME_ROOT=${RUNNER_TEMP}/gp-data/runtime" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./my-stock-src
+
+      - name: Resolve date and generate download matrix
+        id: matrix
+        env:
+          INPUT_DATE: ${{ inputs.date }}
+          INPUT_CODES: ${{ inputs.codes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m my_stock common guard-trade-date \
+            --date "${INPUT_DATE}" \
+            --trade-dates-file "${GITHUB_WORKSPACE}/my-stock-src/data/basic/trade_date.json" \
+            --output "${RUNNER_TEMP}/trade-guard.json"
+          python -m my_stock pankou resolve-download-guard \
+            --guard-file "${RUNNER_TEMP}/trade-guard.json" \
+            --stocks-file "${GITHUB_WORKSPACE}/my-stock-src/data/basic/all_stocks.json" \
+            --trade-dates-file "${GITHUB_WORKSPACE}/my-stock-src/data/basic/trade_date.json" \
+            --codes "${INPUT_CODES}" \
+            --exclude-bj-star \
+            --github-output "${GITHUB_OUTPUT}"
+
+  # ───── 第二阶段：并行分片下载 ─────
+  download:
+    needs: prepare
+    if: needs.prepare.outputs.has_work == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    env:
+      GP_CODE_GITHUB_OWNER: hiyishui
+      GP_DATA_GITHUB_OWNER: larkself
+      GP_CODE_REPO: my-stock
+      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
+      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
+    steps:
+      - name: Check out workflow replica repo
+        uses: actions/checkout@v4
+
+      - name: Check out my-stock source repo
+        uses: actions/checkout@v4
+        with:
+          repository: hiyishui/my-stock
+          ref: main
+          path: my-stock-src
+          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+
+      - name: Resolve runtime roots
+        run: |
+          echo "GP_DATA_ROOT=${RUNNER_TEMP}/gp-data" >> "$GITHUB_ENV"
+          echo "GP_REPOS_ROOT=${RUNNER_TEMP}/gp-data/repos" >> "$GITHUB_ENV"
+          echo "GP_RUNTIME_ROOT=${RUNNER_TEMP}/gp-data/runtime" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./my-stock-src
+
+      - name: Download raw shard
+        env:
+          SHARD_DATE: ${{ matrix.date }}
+          SHARD_SECIDS_JSON: ${{ toJson(matrix.secids) }}
+          SHARD_ALL_SECIDS: ${{ matrix.all_secids }}
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_OUTPUT_ROOT: ${{ runner.temp }}/dl_output
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${SHARD_ALL_SECIDS}" = "true" ]; then
+            python -m my_stock pankou download-raw \
+              --date "${SHARD_DATE}" \
+              --output-root "${SHARD_OUTPUT_ROOT}" \
+              --summary-output "${RUNNER_TEMP}/download-summary-${SHARD_INDEX}.json" \
+              --exclude-bj-star \
+              --all-secids \
+              --stocks-file "${GITHUB_WORKSPACE}/my-stock-src/data/basic/all_stocks.json"
+          else
+            python -m my_stock pankou download-raw \
+              --date "${SHARD_DATE}" \
+              --output-root "${SHARD_OUTPUT_ROOT}" \
+              --summary-output "${RUNNER_TEMP}/download-summary-${SHARD_INDEX}.json" \
+              --exclude-bj-star \
+              --secids-json "${SHARD_SECIDS_JSON}"
+          fi
+
+      - name: Upload raw shard artifact
+        if: success() && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pankou-raw-${{ matrix.date }}-shard${{ matrix.shard }}
+          path: ${{ runner.temp }}/dl_output/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+  # ───── 第三阶段：按日期汇总推送到日期仓 ─────
+  push-date-repo:
+    needs: [prepare, download]
+    if: needs.prepare.outputs.has_work == 'true' && !cancelled()
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.dates_matrix) }}
+    env:
+      GP_CODE_GITHUB_OWNER: hiyishui
+      GP_DATA_GITHUB_OWNER: larkself
+      GP_CODE_REPO: my-stock
+      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
+      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
+    steps:
+      - name: Check out workflow replica repo
+        uses: actions/checkout@v4
+
+      - name: Check out my-stock source repo
+        uses: actions/checkout@v4
+        with:
+          repository: hiyishui/my-stock
+          ref: main
+          path: my-stock-src
+          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+
+      - name: Resolve runtime roots
+        run: |
+          echo "GP_DATA_ROOT=${RUNNER_TEMP}/gp-data" >> "$GITHUB_ENV"
+          echo "GP_REPOS_ROOT=${RUNNER_TEMP}/gp-data/repos" >> "$GITHUB_ENV"
+          echo "GP_RUNTIME_ROOT=${RUNNER_TEMP}/gp-data/runtime" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./my-stock-src
+
+      - name: Download date artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pankou-raw-${{ matrix.date }}-*
+          path: ${{ runner.temp }}/collected
+          merge-multiple: true
+
+      - name: Push date repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m my_stock pankou push-date-repo \
+            --data-dir "${RUNNER_TEMP}/collected" \
+            --date "${{ matrix.date }}" \
+            --output "${RUNNER_TEMP}/push-date-repo-${{ matrix.date }}.json"
+
+      - name: Upload push summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: pankou-push-${{ matrix.date }}
+          path: ${{ runner.temp }}/push-date-repo-${{ matrix.date }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # ───── 第四阶段：提取基础特征 → canonicalize → 推送 gp-pankou ─────
+  extract-base:
+    needs: [prepare, push-date-repo]
+    if: needs.prepare.outputs.has_work == 'true' && success()
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.dates_matrix) }}
+    env:
+      GP_CODE_GITHUB_OWNER: hiyishui
+      GP_DATA_GITHUB_OWNER: larkself
+      GP_CODE_REPO: my-stock
+      GP_GUBEN_REPO: gp-guben
+      GP_PANKOU_REPO: gp-pankou
+      INPUT_DATE: ${{ matrix.date }}
+      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
+      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
+    steps:
+      - name: Check out workflow replica repo
+        uses: actions/checkout@v4
+
+      - name: Check out my-stock source repo
+        uses: actions/checkout@v4
+        with:
+          repository: hiyishui/my-stock
+          ref: main
+          path: my-stock-src
+          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+
+      - name: Resolve runtime roots
+        run: |
+          echo "GP_DATA_ROOT=${RUNNER_TEMP}/gp-data" >> "$GITHUB_ENV"
+          echo "GP_REPOS_ROOT=${RUNNER_TEMP}/gp-data/repos" >> "$GITHUB_ENV"
+          echo "GP_RUNTIME_ROOT=${RUNNER_TEMP}/gp-data/runtime" >> "$GITHUB_ENV"
+
+      - name: Normalize date
+        id: date
+        run: |
+          python -m my_stock common normalize-date \
+            --date "${INPUT_DATE}" \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./my-stock-src
+
+      - name: Sync gp-guben
+        run: python -m my_stock common sync-repo gp-guben
+
+      - name: Sync raw date repo
+        run: python -m my_stock common sync-repo "${{ steps.date.outputs.iso }}"
+
+      - name: Build base pankou parquet
+        run: |
+          python -m my_stock pankou extract-base-features \
+            --date "${{ steps.date.outputs.compact }}" \
+            --data-dir "${GP_REPOS_ROOT}/${{ steps.date.outputs.iso }}" \
+            --summary-output "${RUNNER_TEMP}/pankou-extract-base-summary.json"
+
+      - name: Sync gp-pankou
+        run: python -m my_stock common sync-repo gp-pankou
+
+      - name: Canonicalize base parquet
+        run: |
+          python -m my_stock pankou canonicalize-base \
+            --date "${{ steps.date.outputs.compact }}" \
+            --summary-output "${RUNNER_TEMP}/pankou-canonical-base-summary.json"
+
+      - name: Publish base parquet to gp-pankou
+        run: python -m my_stock pankou publish-base --date "${{ steps.date.outputs.compact }}"
+
+      - name: Upload base artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pankou-base-${{ steps.date.outputs.compact }}
+          path: |
+            ${{ runner.temp }}/pankou-extract-base-summary.json
+            ${{ runner.temp }}/pankou-canonical-base-summary.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # ───── 第五阶段：生成派生特征 → canonicalize → 推送 gp-derived ─────
+  derive-features:
+    needs: [prepare, extract-base]
+    if: needs.prepare.outputs.has_work == 'true' && success()
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.dates_matrix) }}
+    env:
+      GP_CODE_GITHUB_OWNER: hiyishui
+      GP_DATA_GITHUB_OWNER: larkself
+      GP_CODE_REPO: my-stock
+      GP_PANKOU_REPO: gp-pankou
+      GP_DERIVED_REPO: gp-derived
+      INPUT_DATE: ${{ matrix.date }}
+      INPUT_HISTORY_DAYS: ${{ inputs.history_days }}
+      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
+      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
+    steps:
+      - name: Check out workflow replica repo
+        uses: actions/checkout@v4
+
+      - name: Check out my-stock source repo
+        uses: actions/checkout@v4
+        with:
+          repository: hiyishui/my-stock
+          ref: main
+          path: my-stock-src
+          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+
+      - name: Resolve runtime roots
+        run: |
+          echo "GP_DATA_ROOT=${RUNNER_TEMP}/gp-data" >> "$GITHUB_ENV"
+          echo "GP_REPOS_ROOT=${RUNNER_TEMP}/gp-data/repos" >> "$GITHUB_ENV"
+          echo "GP_RUNTIME_ROOT=${RUNNER_TEMP}/gp-data/runtime" >> "$GITHUB_ENV"
+
+      - name: Normalize date
+        id: date
+        run: |
+          python -m my_stock common normalize-date \
+            --date "${INPUT_DATE}" \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./my-stock-src
+
+      - name: Sync gp-pankou
+        run: python -m my_stock common sync-repo gp-pankou
+
+      - name: Build derived feature parquets
+        run: |
+          python -m my_stock pankou derive-features \
+            --date "${{ steps.date.outputs.compact }}" \
+            --base-dir "${GP_REPOS_ROOT}/gp-pankou" \
+            --history-days "${INPUT_HISTORY_DAYS}" \
+            --summary-output "${RUNNER_TEMP}/pankou-derive-summary.json"
+
+      - name: Sync gp-derived
+        run: python -m my_stock common sync-repo gp-derived
+
+      - name: Canonicalize derived parquets
+        run: |
+          python -m my_stock pankou canonicalize-derived \
+            --date "${{ steps.date.outputs.compact }}" \
+            --summary-output "${RUNNER_TEMP}/pankou-canonical-derived-summary.json"
+
+      - name: Publish derived parquets to gp-derived
+        run: python -m my_stock pankou publish-derived --date "${{ steps.date.outputs.compact }}"
+
+      - name: Upload derived artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pankou-derived-${{ steps.date.outputs.compact }}
+          path: |
+            ${{ runner.temp }}/pankou-derive-summary.json
+            ${{ runner.temp }}/pankou-canonical-derived-summary.json
+          if-no-files-found: error
+          retention-days: 7
