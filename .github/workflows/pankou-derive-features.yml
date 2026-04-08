@@ -1,12 +1,3 @@
-# 功能：
-# - 从 `larkself/gp-pankou` 读取历史 base parquet，生成指定日期的 derived parquet。
-# - 发布前先把 runtime 文件 canonicalize 成旧仓 exact schema，再推回 `larkself/gp-derived`。
-#
-# 用法：
-# - 该源文件应复制到任意 workflow 副本仓库中运行；副本仓库需要配置主仓 PAT 和数据仓 PAT。
-# - 在 GitHub Actions 中通过 `workflow_dispatch` 手动触发，并传入 `date=YYYYMMDD`。
-# - 实际命令入口为 `python -m my_stock pankou derive-features`
-#   和 `python -m my_stock pankou canonicalize-derived`，其中代码来自 checkout 下来的 `hiyishui/my-stock`。
 name: 盘口派生特征生成
 
 on:
@@ -40,10 +31,8 @@ jobs:
       GP_DERIVED_REPO: gp-derived
       INPUT_DATE: ${{ inputs.date }}
       INPUT_HISTORY_DAYS: ${{ inputs.history_days }}
-      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
-      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
-      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
-      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.HIYISHUI_PAT }}
       MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
     steps:
       - name: Check out workflow replica repo
@@ -55,7 +44,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.CODE_GITHUB_PAT }}
 
       - name: Resolve runtime roots
         run: |

@@ -1,17 +1,3 @@
-# 功能：
-# - 无需输入参数，自动从各年度 raw 仓扫描待处理批次文件。
-# - 通过 Redis SET NX 抢占批次锁，支持多副本仓并发各自处理不同批次。
-# - 按 runner 分片并行抓取公告正文，将结果归并后按日写入 raw/content/YYYYMM/YYYYMMDD_XXXX.parquet。
-# - 归并发布后自动删除已处理批次文件，并释放 Redis 锁。
-# - 若仍有待处理批次则自触发下一轮 `announce-fetch-content.yml`；
-#   若批次已清空则幂等触发 `announce-build-features.yml`。
-#
-# 用法：
-# - 该源文件应复制到任意 workflow 副本仓库中运行；副本仓库需要配置主仓 PAT、数据仓 PAT 和 REDIS_URL。
-# - 可通过 `workflow_dispatch` 手动触发，也可配合 schedule 定时触发。
-# - workflow 内调用的核心脚本命令包括：
-#   `plan-and-lock-batch`、`fetch-content-worker`、`merge-content-fragments`、
-#   `publish-runtime-content`、`delete-processed-batch`、`release-batch-lock`、`continue-fetch`。
 name: 公告正文抓取
 
 on:
@@ -43,10 +29,8 @@ jobs:
       GP_CODE_GITHUB_OWNER: hiyishui
       GP_DATA_GITHUB_OWNER: larkself
       GP_CODE_REPO: my-stock
-      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
-      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
-      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
-      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.HIYISHUI_PAT }}
       MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
       REDIS_URL: ${{ secrets.REDIS_URL }}
     steps:
@@ -59,7 +43,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.CODE_GITHUB_PAT }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -112,10 +96,8 @@ jobs:
       GP_CODE_GITHUB_OWNER: hiyishui
       GP_DATA_GITHUB_OWNER: larkself
       GP_CODE_REPO: my-stock
-      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
-      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
-      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
-      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.HIYISHUI_PAT }}
       MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
     steps:
       - name: Check out workflow replica repo
@@ -127,7 +109,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.CODE_GITHUB_PAT }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -177,10 +159,8 @@ jobs:
       GP_CODE_GITHUB_OWNER: hiyishui
       GP_DATA_GITHUB_OWNER: larkself
       GP_CODE_REPO: my-stock
-      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
-      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
-      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
-      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.HIYISHUI_PAT }}
       MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
       BATCH_ID: ${{ needs.plan.outputs.batch_id }}
       BATCH_REPO: ${{ needs.plan.outputs.batch_repo }}
@@ -198,7 +178,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.CODE_GITHUB_PAT }}
 
       - name: Set up Python
         uses: actions/setup-python@v5

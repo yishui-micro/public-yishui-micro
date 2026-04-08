@@ -1,13 +1,3 @@
-# 功能：
-# - 盘口数据主链: 下载 raw → 提取 base → 生成 derived，串行执行。
-# - 第一阶段并行分片下载 raw .dat，汇总推送到日期仓。
-# - 第二阶段为每个日期依次提取基础特征 → canonicalize → 推送 gp-pankou。
-# - 第三阶段为每个日期依次生成派生特征 → canonicalize → 推送 gp-derived。
-#
-# 用法：
-# - 该源文件应复制到任意 workflow 副本仓库中运行；副本仓库需要配置主仓 PAT 和数据仓 PAT。
-# - 在 GitHub Actions 中通过 `workflow_dispatch` 手动触发，可传入 `date`、`codes` 和 `force`。
-# - 若不传 `date`，workflow 会自动取 Asia/Shanghai 当天日期。
 name: 盘口主链刷新
 
 on:
@@ -55,10 +45,8 @@ jobs:
       GP_CODE_GITHUB_OWNER: hiyishui
       GP_DATA_GITHUB_OWNER: larkself
       GP_CODE_REPO: my-stock
-      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
-      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
-      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
-      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.HIYISHUI_PAT }}
       MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
     steps:
       - name: Check out workflow replica repo
@@ -70,7 +58,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.CODE_GITHUB_PAT }}
 
       - name: Resolve runtime roots
         run: |
@@ -121,10 +109,8 @@ jobs:
       GP_CODE_GITHUB_OWNER: hiyishui
       GP_DATA_GITHUB_OWNER: larkself
       GP_CODE_REPO: my-stock
-      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
-      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
-      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
-      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.HIYISHUI_PAT }}
       MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
     steps:
       - name: Check out workflow replica repo
@@ -136,7 +122,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.CODE_GITHUB_PAT }}
 
       - name: Resolve runtime roots
         run: |
@@ -203,10 +189,8 @@ jobs:
       GP_CODE_GITHUB_OWNER: hiyishui
       GP_DATA_GITHUB_OWNER: larkself
       GP_CODE_REPO: my-stock
-      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
-      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
-      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
-      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.HIYISHUI_PAT }}
       MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
     steps:
       - name: Check out workflow replica repo
@@ -218,7 +202,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.CODE_GITHUB_PAT }}
 
       - name: Resolve runtime roots
         run: |
@@ -275,10 +259,8 @@ jobs:
       GP_GUBEN_REPO: gp-guben
       GP_PANKOU_REPO: gp-pankou
       INPUT_DATE: ${{ matrix.date }}
-      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
-      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
-      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
-      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.HIYISHUI_PAT }}
       MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
     steps:
       - name: Check out workflow replica repo
@@ -290,7 +272,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.CODE_GITHUB_PAT }}
 
       - name: Resolve runtime roots
         run: |
@@ -366,10 +348,8 @@ jobs:
       GP_DERIVED_REPO: gp-derived
       INPUT_DATE: ${{ matrix.date }}
       INPUT_HISTORY_DAYS: ${{ inputs.history_days }}
-      LARKSELF_PAT: ${{ secrets.LARKSELF_PAT }}
-      DATA_GITHUB_PAT: ${{ secrets.DATA_GITHUB_PAT }}
-      HIYISHUI_PAT: ${{ secrets.HIYISHUI_PAT }}
-      CODE_GITHUB_PAT: ${{ secrets.CODE_GITHUB_PAT }}
+      DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
+      CODE_GITHUB_PAT: ${{ secrets.HIYISHUI_PAT }}
       MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
     steps:
       - name: Check out workflow replica repo
@@ -381,7 +361,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.HIYISHUI_PAT || secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.CODE_GITHUB_PAT }}
 
       - name: Resolve runtime roots
         run: |
