@@ -52,7 +52,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.HIYISHUI_PAT }}
 
       - name: Resolve runtime roots
         run: |
@@ -115,7 +115,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.HIYISHUI_PAT }}
 
       - name: Resolve runtime roots
         run: |
@@ -194,7 +194,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.HIYISHUI_PAT }}
 
       - name: Resolve runtime roots
         run: |

@@ -43,7 +43,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.HIYISHUI_PAT }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -109,7 +109,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.HIYISHUI_PAT }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -178,7 +178,7 @@ jobs:
           repository: hiyishui/my-stock
           ref: main
           path: my-stock-src
-          token: ${{ secrets.CODE_GITHUB_PAT }}
+          token: ${{ secrets.HIYISHUI_PAT }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
