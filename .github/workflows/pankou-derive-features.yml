@@ -52,13 +52,6 @@ jobs:
           echo "GP_REPOS_ROOT=${RUNNER_TEMP}/gp-data/repos" >> "$GITHUB_ENV"
           echo "GP_RUNTIME_ROOT=${RUNNER_TEMP}/gp-data/runtime" >> "$GITHUB_ENV"
 
-      - name: Normalize date
-        id: date
-        run: |
-          python -m my_stock common normalize-date \
-            --date "${INPUT_DATE}" \
-            --github-output "${GITHUB_OUTPUT}"
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -68,6 +61,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install ./my-stock-src
+
+      - name: Normalize date
+        id: date
+        run: |
+          python -m my_stock common normalize-date \
+            --date "${INPUT_DATE}" \
+            --github-output "${GITHUB_OUTPUT}"
 
       - name: Sync gp-pankou
         run: python -m my_stock common sync-repo gp-pankou
