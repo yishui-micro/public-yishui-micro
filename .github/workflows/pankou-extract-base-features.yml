@@ -169,6 +169,7 @@ jobs:
     env:
       GP_CODE_GITHUB_OWNER: hiyishui
       GP_DATA_GITHUB_OWNER: larkself
+      GP_PANKOU_REPO: gp-pankou
       DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
       CODE_GITHUB_PAT: ${{ secrets.HIYISHUI_PAT }}
       MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
