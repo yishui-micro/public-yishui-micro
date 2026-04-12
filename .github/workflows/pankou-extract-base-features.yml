@@ -215,8 +215,12 @@ jobs:
     needs: [prepare, collect-round]
     if: needs.prepare.outputs.has_next_round == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
     env:
       DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
+      GITHUB_TOKEN: ${{ github.token }}
       MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
     steps:
       - name: Check out my-stock source repo
