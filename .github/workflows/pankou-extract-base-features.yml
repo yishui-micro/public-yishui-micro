@@ -93,6 +93,8 @@ jobs:
       DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
       CODE_GITHUB_PAT: ${{ secrets.HIYISHUI_PAT }}
       MY_STOCK_PROJECT_ROOT: ${{ github.workspace }}/my-stock-src
+      PYTHONUNBUFFERED: "1"
+      MY_STOCK_WORKERS: "4"
     steps:
       - name: Check out workflow replica repo
         uses: actions/checkout@v4
