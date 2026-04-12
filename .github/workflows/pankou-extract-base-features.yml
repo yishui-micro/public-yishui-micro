@@ -164,7 +164,7 @@ jobs:
   # ── 3. Collect round: push artifacts to action-private or publish ─
   collect-round:
     needs: [prepare, extract-base]
-    if: needs.prepare.outputs.has_work == 'true'
+    if: ${{ !cancelled() && needs.prepare.outputs.has_work == 'true' }}
     runs-on: ubuntu-latest
     env:
       GP_CODE_GITHUB_OWNER: hiyishui
@@ -213,7 +213,7 @@ jobs:
   # ── 4. Next round: self-trigger if more rounds remain ────────────
   next-round:
     needs: [prepare, collect-round]
-    if: needs.prepare.outputs.has_next_round == 'true'
+    if: ${{ !cancelled() && needs.prepare.outputs.has_next_round == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
