@@ -84,13 +84,20 @@ jobs:
             --start "${{ steps.range.outputs.start }}" \
             --end "${{ steps.range.outputs.end }}"
 
-      - name: Build feature files into runtime
+      - name: "L1: Extract base features"
         if: steps.trade_guard.outputs.should_run == 'true'
         run: |
-          python -m my_stock announce build-features \
+          python -m my_stock announce extract-base-features \
             --start "${{ steps.range.outputs.start }}" \
             --end "${{ steps.range.outputs.end }}" \
-            --no-push \
+            --summary-output "${RUNNER_TEMP}/announce-base-features-summary.json"
+
+      - name: "L2H: Derive history features"
+        if: steps.trade_guard.outputs.should_run == 'true'
+        run: |
+          python -m my_stock announce derive-history-features \
+            --start "${{ steps.range.outputs.start }}" \
+            --end "${{ steps.range.outputs.end }}" \
             --summary-output "${RUNNER_TEMP}/announce-build-features-summary.json"
 
       - name: Publish runtime features to gp-announce-features
@@ -107,6 +114,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: announce-build-features-summary
-          path: ${{ runner.temp }}/announce-build-features-summary.json
+          path: |
+            ${{ runner.temp }}/announce-base-features-summary.json
+            ${{ runner.temp }}/announce-build-features-summary.json
           if-no-files-found: error
           retention-days: 7
