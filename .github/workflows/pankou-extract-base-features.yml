@@ -33,10 +33,11 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      dates_matrix: ${{ steps.resolve.outputs.dates_matrix }}
-      has_work:     ${{ steps.resolve.outputs.has_work }}
-      total_rounds: ${{ steps.resolve.outputs.total_rounds }}
-      current_round: ${{ steps.resolve.outputs.current_round }}
+      dates_matrix:    ${{ steps.resolve.outputs.dates_matrix }}
+      has_work:        ${{ steps.resolve.outputs.has_work }}
+      has_next_round:  ${{ steps.resolve.outputs.has_next_round }}
+      total_rounds:    ${{ steps.resolve.outputs.total_rounds }}
+      current_round:   ${{ steps.resolve.outputs.current_round }}
     env:
       GP_CODE_GITHUB_OWNER: hiyishui
       GP_DATA_GITHUB_OWNER: larkself
@@ -210,9 +211,7 @@ jobs:
   # ── 4. Next round: self-trigger if more rounds remain ────────────
   next-round:
     needs: [prepare, collect-round]
-    if: |
-      needs.prepare.outputs.has_work == 'true' &&
-      fromJson(needs.prepare.outputs.current_round) < fromJson(needs.prepare.outputs.total_rounds) - 1
+    if: needs.prepare.outputs.has_next_round == 'true'
     runs-on: ubuntu-latest
     env:
       DATA_GITHUB_PAT: ${{ secrets.LARKSELF_PAT }}
